@@ -3,7 +3,7 @@ import { Boxes, Download, Filter, Search, SlidersHorizontal } from "lucide-react
 import { api } from "../api";
 import { Badge, Card, EmptyState, PageHeading, RiskBadge, fmt, formatDateOnly } from "../components";
 
-export default function Inventory({ data, navigate, run }) {
+export default function Inventory({ data, navigate, run, user }) {
   const [search, setSearch] = useState("");
   const [risk, setRisk] = useState("All");
   const [hospital, setHospital] = useState("All");
@@ -82,7 +82,7 @@ export default function Inventory({ data, navigate, run }) {
                 <td>{fmt(item.safety_stock)} <small className="unit-label">{item.unit}</small></td>
                 <td><div className={"days-cell " + (item.risk === "Critical" ? "days-critical" : item.risk === "Watch" ? "days-watch" : "")}><strong>{item.days_remaining == null ? "—" : fmt(item.days_remaining, 1)}</strong><span>days</span></div></td>
                 <td><RiskBadge risk={item.risk} /></td>
-                <td><button className="button button-outline" disabled={item.current_stock<=0} onClick={()=>{setSaleItem(item);setSaleQuantity(1);}}>Record sale</button></td>
+                <td><button className="button button-outline" disabled={item.current_stock<=0 || !user?.memberships?.some((membership)=>membership.hospital_id===item.hospital_id && membership.role!=="Read-only User")} onClick={()=>{setSaleItem(item);setSaleQuantity(1);}}>Record sale</button></td>
               </tr>
             ))}</tbody>
           </table>

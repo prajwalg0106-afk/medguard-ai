@@ -344,3 +344,16 @@
 .learning-card strong { color: #506355; font-size: 9px; }
 .learning-card p { margin: 5px 0; color: #78857c; font-size: 8.2px; line-height: 1.55; }
 .learning-card small { color: #9a8a6a; font-size: 7.8px; line-height: 1.45; }
+.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.metric-grid .metric-value { display: block; color: var(--ink, #102a43); font-size: 30px; line-height: 1.2; margin: 4px 0 6px; }
+.form-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 12px 0 18px; }
+.form-row label { display: grid; gap: 6px; min-width: 180px; flex: 1; font-size: 12px; font-weight: 650; }
+.form-row input, .form-row select { min-height: 40px; border: 1px solid #d4dee7; border-radius: 8px; padding: 8px 10px; background: #fff; color: #152a3b; }
+.action-cell { display: flex; flex-wrap: wrap; gap: 6px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: rgba(10, 28, 44, .52); }
+.modal-card { width: min(520px, 100%); padding: 28px; border-radius: 16px; background: #fff; box-shadow: 0 22px 70px rgba(10, 28, 44, .25); }
+.modal-card h2 { margin: 0 0 12px; color: #163149; font-size: 23px; }
+.modal-card p { line-height: 1.55; }
+.modal-icon { display: grid; place-items: center; width: 42px; height: 42px; margin-bottom: 12px; color: #9a5100; background: #fff2dc; border-radius: 12px; }
+.modal-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+@media (max-width: 760px) { .metric-grid { grid-template-columns: 1fr; } .modal-actions { justify-content: stretch; } .modal-actions .button { flex: 1; } }

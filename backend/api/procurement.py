@@ -1,22 +1,25 @@
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from backend import db
 from backend.agents.logistics import route_options
 from backend.api.common import ProcurementRequest
+from backend.api.tenant import require_session, _assert_access
 
 router = APIRouter(prefix="/api")
 
 
 @router.post("/recommendations/procure")
-def request_procurement(payload: ProcurementRequest):
+def request_procurement(payload: ProcurementRequest, user: dict = Depends(require_session)):
     with db.connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         disruption = connection.execute(
             "SELECT * FROM disruptions WHERE status='active' ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
         if not disruption:
             raise HTTPException(409, "Run a disruption scenario before requesting procurement.")
+        _assert_access(user, disruption["hospital_id"], write=True)
         medicine = connection.execute(
             "SELECT * FROM medicines WHERE id=?", (disruption["medicine_id"],)
         ).fetchone()

@@ -26,11 +26,12 @@ function nextLabel(status, target) {
   return "Mark in transit";
 }
 
-export default function Transportation({ data, run }) {
+export default function Transportation({ data, run, user }) {
   const [medicineId, setMedicineId] = useState(data.inventory?.[0]?.medicine_id || "NOREPI");
-  const [hospitalId, setHospitalId] = useState("ASTR");
+  const [hospitalId, setHospitalId] = useState(user?.memberships?.[0]?.hospital_id || "ASTR");
   const [quantity, setQuantity] = useState(10);
   const [placingOrder, setPlacingOrder] = useState(false);
+  const canWriteOrder = user?.memberships?.some((item) => item.hospital_id === hospitalId && item.role !== "Read-only User");
   const shipments = data.shipments || [];
   const active = shipments.filter((item) => item.status !== "Delivered");
   const delivered = shipments.filter((item) => item.status === "Delivered");
@@ -52,12 +53,12 @@ export default function Transportation({ data, run }) {
   return (
     <>
       <PageHeading eyebrow="MOVE WITH VISIBILITY" title="Transportation" description="Track shipment state and compare the demo route, capacity, and estimated arrival. Route data is simulated." />
-      <Card title="Order medicine for a pharmacy" subtitle="Choose a pharmacy, medicine, and quantity. New orders appear in Active shipments below.">
+      <Card title="Order medicine for a pharmacy" subtitle="Orders are limited to pharmacies in your account. Supplier stock is reserved when you place an order.">
         <form className="order-form" onSubmit={placeOrder}>
-          <label><span>Pharmacy</span><select className="select-field" value={hospitalId} onChange={e=>setHospitalId(e.target.value)}>{data.hospitals.map(h=><option key={h.id} value={h.id}>{h.name}</option>)}</select></label>
+          <label><span>Pharmacy</span><select className="select-field" value={hospitalId} onChange={e=>setHospitalId(e.target.value)}>{user.memberships.map(m=><option key={m.hospital_id} value={m.hospital_id}>{m.pharmacy_name}</option>)}</select></label>
           <label><span>Medicine</span><select className="select-field" value={medicineId} onChange={e=>setMedicineId(e.target.value)}>{[...new Map(data.inventory.map(i=>[i.medicine_id,i])).values()].map(i=><option key={i.medicine_id} value={i.medicine_id}>{i.medicine_name}</option>)}</select></label>
           <label><span>Quantity</span><input className="select-field" type="number" min="1" max="10000" step="1" value={quantity} onChange={e=>setQuantity(e.target.value)} /></label>
-          <button className="button button-primary" type="submit" disabled={placingOrder||!Number.isInteger(Number(quantity))||Number(quantity)<1}>{placingOrder ? "Placing order…" : "Place order"}</button>
+          <button className="button button-primary" type="submit" disabled={!canWriteOrder||placingOrder||!Number.isInteger(Number(quantity))||Number(quantity)<1}>{placingOrder ? "Placing order…" : "Place order"}</button>
         </form>
         <p className="provider-limit">Demo supplier, route, and arrival estimates are simulated.</p>
       </Card>
@@ -78,7 +79,7 @@ export default function Transportation({ data, run }) {
               </div>
               <div className="shipment-main">
                 <div><span>Medicine & quantity</span><strong>{item.medicine_name}</strong><small>{fmt(item.quantity)} {item.unit}</small></div>
-                <div><span>Origin</span><strong>{item.source_label}</strong><small>{item.source_type === "hospital" ? "Hospital transfer" : "Supplier replenishment"}</small></div>
+                <div><span>Origin</span><strong>{item.source_type === "hospital" ? (item.source_hospital_name || item.source_label) : item.source_label}</strong><small>{item.source_type === "hospital" ? "Hospital transfer" : "Supplier replenishment"}</small></div>
                 <div><span>Destination</span><strong>{item.destination_name}</strong><small>{item.destination_city}</small></div>
               </div>
               <ShipmentRoute item={item} />
