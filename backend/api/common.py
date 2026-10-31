@@ -85,16 +85,16 @@ def recommendation(connection, recommendation_id: str):
 
 
 def create_shipment(connection, rec, source_type: str, source_id: str | None,
-                    source_label: str, route: dict, quantity: int) -> str:
+                    source_label: str, route: dict, quantity: int, source_reserved: bool = False) -> str:
     shipment_id = db.new_id("SHP")
     eta = float(route.get("eta_hours", 0))
     connection.execute(
         """INSERT INTO shipments
            (id,recommendation_id,source_type,source_id,source_label,destination_id,medicine_id,
-            quantity,status,eta_hours,expected_arrival,route_json,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            quantity,status,eta_hours,expected_arrival,route_json,created_at,source_reserved)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (shipment_id, rec["id"], source_type, source_id, source_label,
          rec["hospital_id"], rec["medicine_id"], quantity, "Approved",
-         eta, days_until(eta), json.dumps(route), db.now_iso()),
+         eta, days_until(eta), json.dumps(route), db.now_iso(), int(source_reserved)),
     )
     return shipment_id
