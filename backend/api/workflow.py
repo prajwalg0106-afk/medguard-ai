@@ -1,18 +1,15 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 
 from backend import db
 from backend.agents.orchestrator import run_disruption_workflow
 from backend.agents.llm import explain_with_ollama
 from backend.api.common import ScenarioRequest
-from backend.api.tenant import require_session
 
 router = APIRouter(prefix="/api")
 
 
 @router.post("/disruptions/simulate")
-def simulate(payload: ScenarioRequest, user: dict = Depends(require_session)):
-    if not user.get("memberships"):
-        raise HTTPException(403,"A hospital membership is required to coordinate the demo network.")
+def simulate(payload: ScenarioRequest):
     with db.connect() as connection:
         active = connection.execute("SELECT id FROM disruptions WHERE status='active' LIMIT 1").fetchone()
         if active:
@@ -36,9 +33,7 @@ def simulate(payload: ScenarioRequest, user: dict = Depends(require_session)):
 
 
 @router.post("/demo/reset")
-def reset_demo(user: dict = Depends(require_session)):
-    if user.get("role") != "Platform Administrator":
-        raise HTTPException(403,"Only a platform administrator can reset the synthetic demo.")
+def reset_demo():
     with db.connect() as connection:
         has_sales = connection.execute("SELECT EXISTS(SELECT 1 FROM sales_transactions)").fetchone()[0]
         has_pharmacy_orders = connection.execute("SELECT EXISTS(SELECT 1 FROM audit_events WHERE event_type='pharmacy.order')").fetchone()[0]

@@ -3,10 +3,9 @@ import io
 import os
 import zipfile
 import xml.etree.ElementTree as ET
-from fastapi import APIRouter, Header, HTTPException, Depends
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from backend import db
-from backend.api.tenant import require_session
 
 router = APIRouter(prefix="/api/admin")
 
@@ -42,9 +41,7 @@ def _workbook(rows):
     return output
 
 @router.get("/stock-sales.xlsx")
-def stock_sales_report(x_admin_key: str | None = Header(default=None), user: dict = Depends(require_session)):
-    if user.get("role") != "Platform Administrator":
-        raise HTTPException(403, "A signed-in platform administrator is required.")
+def stock_sales_report(x_admin_key: str | None = Header(default=None)):
     key = os.environ.get("MEDGUARD_ADMIN_KEY")
     if not key:
         raise HTTPException(503, "Admin report is disabled. Set MEDGUARD_ADMIN_KEY before starting the app.")

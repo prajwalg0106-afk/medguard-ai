@@ -14,47 +14,7 @@ from typing import Iterator
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("MEDGUARD_DB_PATH", str(BASE_DIR / "medguard.sqlite3")))
-DATABASE_URL = os.environ.get("MEDGUARD_DATABASE_URL") or os.environ.get("DATABASE_URL")
 SEED_PATH = BASE_DIR / "data" / "demo_data.json"
-
-
-def is_postgres() -> bool:
-    return bool(DATABASE_URL and DATABASE_URL.startswith(("postgres://", "postgresql://")))
-
-
-class _HybridRow(dict):
-    """Mapping row with SQLite-compatible numeric indexing."""
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            return tuple(self.values())[key]
-        return super().__getitem__(key)
-
-
-def _postgres_row_factory(cursor):
-    names = tuple(column.name for column in cursor.description)
-    return lambda values: _HybridRow(zip(names, values))
-
-
-class _PostgresConnection:
-    def __init__(self, connection):
-        self._connection = connection
-
-    def execute(self, sql, parameters=()):
-        # The existing application uses qmark placeholders and one SQLite lock command.
-        sql = sql.replace("BEGIN IMMEDIATE", "BEGIN").replace("?", "%s")
-        return self._connection.execute(sql, parameters)
-
-    def executemany(self, sql, parameters):
-        return self._connection.executemany(sql.replace("?", "%s"), parameters)
-
-    def commit(self):
-        return self._connection.commit()
-
-    def rollback(self):
-        return self._connection.rollback()
-
-    def close(self):
-        return self._connection.close()
 
 DEFAULT_SETTINGS = {
     "critical_days": "3",
@@ -109,8 +69,7 @@ CREATE TABLE IF NOT EXISTS shipments (
   id TEXT PRIMARY KEY, recommendation_id TEXT, source_type TEXT NOT NULL, source_id TEXT,
   source_label TEXT NOT NULL, destination_id TEXT NOT NULL, medicine_id TEXT NOT NULL,
   quantity REAL NOT NULL, status TEXT NOT NULL, eta_hours REAL NOT NULL,
-  expected_arrival TEXT, route_json TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT,
-  source_reserved INTEGER NOT NULL DEFAULT 0
+  expected_arrival TEXT, route_json TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT
 );
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY, event_type TEXT NOT NULL, actor TEXT NOT NULL,
@@ -157,28 +116,6 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
   id TEXT PRIMARY KEY, purchase_order_id TEXT NOT NULL, medicine_id TEXT NOT NULL, quantity REAL NOT NULL,
   unit_price REAL, FOREIGN KEY(purchase_order_id) REFERENCES purchase_orders(id)
 );
-CREATE TABLE IF NOT EXISTS shortage_alerts (
-  id TEXT PRIMARY KEY, hospital_id TEXT NOT NULL, medicine_id TEXT NOT NULL, risk_level TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'open', current_stock REAL NOT NULL, minimum_threshold REAL NOT NULL DEFAULT 0, daily_demand REAL NOT NULL,
-  days_remaining REAL, shortage_date TEXT, factors_json TEXT NOT NULL, recommended_action TEXT NOT NULL,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolved_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_shortage_alerts_scope ON shortage_alerts(hospital_id,status,created_at);
-CREATE TABLE IF NOT EXISTS email_delivery_logs (
-  id TEXT PRIMARY KEY, alert_id TEXT, hospital_id TEXT, recipient TEXT NOT NULL, kind TEXT NOT NULL,
-  status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS hospital_transfer_requests (
-  id TEXT PRIMARY KEY, medicine_id TEXT NOT NULL, source_hospital_id TEXT NOT NULL,
-  destination_hospital_id TEXT NOT NULL, quantity REAL NOT NULL, urgency TEXT NOT NULL,
-  status TEXT NOT NULL, requested_by TEXT NOT NULL, decided_by TEXT, note TEXT,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, delivered_at TEXT
-);
-CREATE TABLE IF NOT EXISTS transfer_history (
-  id TEXT PRIMARY KEY, request_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,
-  actor TEXT NOT NULL, note TEXT, created_at TEXT NOT NULL,
-  FOREIGN KEY(request_id) REFERENCES hospital_transfer_requests(id)
-);
 """
 
 
@@ -213,19 +150,11 @@ def session_hash(token: str) -> str:
 
 
 @contextmanager
-def connect() -> Iterator:
-    if is_postgres():
-        try:
-            import psycopg
-        except ImportError as exc:
-            raise RuntimeError("PostgreSQL is configured but psycopg is not installed. Install backend/requirements.txt.") from exc
-        raw_connection = psycopg.connect(DATABASE_URL, row_factory=_postgres_row_factory, connect_timeout=10)
-        connection = _PostgresConnection(raw_connection)
-    else:
-        connection = sqlite3.connect(DB_PATH, timeout=8)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 8000")
+def connect() -> Iterator[sqlite3.Connection]:
+    connection = sqlite3.connect(DB_PATH, timeout=8)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 8000")
     try:
         yield connection
         connection.commit()
@@ -303,7 +232,7 @@ def _seed_dataset(connection: sqlite3.Connection) -> None:
              eta, expected, json.dumps(item["route"]), stamp, now_iso() if item["status"] == "Delivered" else None),
         )
     for key, value in DEFAULT_SETTINGS.items():
-        connection.execute("INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT DO NOTHING", (key, value))
+        connection.execute("INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)", (key, value))
 
 
 def _seed_medguard_two(connection: sqlite3.Connection) -> None:
@@ -320,7 +249,7 @@ def _seed_medguard_two(connection: sqlite3.Connection) -> None:
                 (user_id, email, name, password_hash(password), role, 1, now_iso()))
     memberships = [("USR-ADMIN", "ASTR", "Platform Administrator"), ("USR-ASTER", "ASTR", "Pharmacy Owner"),
                    ("USR-LAKE", "LAKE", "Pharmacist / Inventory Manager"), ("USR-READ", "ASTR", "Read-only User")]
-    connection.executemany("INSERT INTO pharmacy_memberships(user_id,hospital_id,role) VALUES (?,?,?) ON CONFLICT DO NOTHING", memberships)
+    connection.executemany("INSERT OR IGNORE INTO pharmacy_memberships(user_id,hospital_id,role) VALUES (?,?,?)", memberships)
     for row in connection.execute("SELECT hospital_id,medicine_id,current_stock FROM inventory").fetchall():
         exists = connection.execute("SELECT 1 FROM medicine_batches WHERE hospital_id=? AND medicine_id=?", (row["hospital_id"], row["medicine_id"])).fetchone()
         if not exists:
@@ -331,7 +260,7 @@ def _seed_medguard_two(connection: sqlite3.Connection) -> None:
     # Backfill an auditable movement view for sales already in the SQLite file.
     # Keep their original IDs, quantities, and timestamps intact.
     for sale in connection.execute("SELECT id,hospital_id,medicine_id,quantity,sold_at FROM sales_transactions").fetchall():
-        connection.execute("INSERT INTO stock_movements(id,hospital_id,medicine_id,batch_id,movement_type,quantity,note,actor,created_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+        connection.execute("INSERT OR IGNORE INTO stock_movements(id,hospital_id,medicine_id,batch_id,movement_type,quantity,note,actor,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (sale["id"], sale["hospital_id"], sale["medicine_id"], None, "sale", sale["quantity"], "Migrated from existing sales history", "Existing record", sale["sold_at"]))
     if not connection.execute("SELECT 1 FROM notifications").fetchone():
         connection.executemany("INSERT INTO notifications(id,hospital_id,kind,severity,title,message,status,simulated,created_at) VALUES (?,?,?,?,?,?,?,?,?)", [
@@ -340,45 +269,21 @@ def _seed_medguard_two(connection: sqlite3.Connection) -> None:
         ])
 
 
-def initialize(seed_if_empty: bool = True) -> None:
-    if not is_postgres():
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        backup_path = DB_PATH.with_suffix(".pre_medguard_2_backup.sqlite3")
-        if DB_PATH.exists() and not backup_path.exists():
-            shutil.copy2(DB_PATH, backup_path)
+def initialize() -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    backup_path = DB_PATH.with_suffix(".pre_medguard_2_backup.sqlite3")
+    if DB_PATH.exists() and not backup_path.exists():
+        shutil.copy2(DB_PATH, backup_path)
     with connect() as connection:
-        if is_postgres():
-            for statement in SCHEMA.split(";"):
-                statement = statement.strip()
-                if statement and not statement.upper().startswith("PRAGMA"):
-                    connection.execute(statement)
-            def columns(table):
-                return {row[0] for row in connection.execute(
-                    "SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=?", (table,)
-                ).fetchall()}
-        else:
-            connection.executescript(SCHEMA)
-            def columns(table):
-                return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-        email_columns = columns("email_delivery_logs")
-        if "hospital_id" not in email_columns:
-            connection.execute("ALTER TABLE email_delivery_logs ADD COLUMN hospital_id TEXT")
-        medicine_columns = columns("medicines")
-        if "manufacture_date" not in medicine_columns:
+        connection.executescript(SCHEMA)
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(medicines)")}
+        if "manufacture_date" not in columns:
             connection.execute("ALTER TABLE medicines ADD COLUMN manufacture_date TEXT")
-        if "expiry_date" not in medicine_columns:
+        if "expiry_date" not in columns:
             connection.execute("ALTER TABLE medicines ADD COLUMN expiry_date TEXT")
-        shipment_columns = columns("shipments")
-        if "source_reserved" not in shipment_columns:
-            connection.execute("ALTER TABLE shipments ADD COLUMN source_reserved INTEGER NOT NULL DEFAULT 0")
-        alert_columns = columns("shortage_alerts")
-        if "minimum_threshold" not in alert_columns:
-            connection.execute("ALTER TABLE shortage_alerts ADD COLUMN minimum_threshold REAL NOT NULL DEFAULT 0")
-        manufacture = (datetime.now(timezone.utc)-timedelta(days=120)).date().isoformat()
-        expiry = (datetime.now(timezone.utc)+timedelta(days=540)).date().isoformat()
-        connection.execute("UPDATE medicines SET manufacture_date=COALESCE(manufacture_date,?), expiry_date=COALESCE(expiry_date,?)", (manufacture, expiry))
+        connection.execute("UPDATE medicines SET manufacture_date=COALESCE(manufacture_date,date('now','-120 day')), expiry_date=COALESCE(expiry_date,date('now','+540 day'))")
         count = connection.execute("SELECT COUNT(*) FROM hospitals").fetchone()[0]
-        if count == 0 and seed_if_empty:
+        if count == 0:
             _seed_dataset(connection)
             record_audit(
                 connection, "system.seeded", "MedGuard demo",
@@ -386,8 +291,7 @@ def initialize(seed_if_empty: bool = True) -> None:
                 "dataset", "demo-data",
                 {"hospitals": 5, "medicines": 5, "supplier_count": 4, "simulated": True},
             )
-        if seed_if_empty:
-            _seed_medguard_two(connection)
+        _seed_medguard_two(connection)
 
 
 def reset_demo() -> None:

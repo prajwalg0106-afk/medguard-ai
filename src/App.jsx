@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, ArrowUpRight, BarChart3, Boxes, CheckCircle2, ClipboardCheck, Factory,
   LayoutDashboard, LogOut, MapPinned, PackagePlus, RotateCcw, Settings2, ShieldPlus, Truck, Wifi,
-  AlertTriangle,
 } from "lucide-react";
 import { api } from "./api";
 import { ErrorBanner, LoadingState, formatDate } from "./components";
@@ -16,13 +15,11 @@ import Audit from "./pages/Audit";
 import Settings from "./pages/Settings";
 import Login from "./pages/Login";
 import PharmacyWorkspace from "./pages/PharmacyWorkspace";
-import ShortageCoordination from "./pages/ShortageCoordination";
 
 const navigation = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, group: "Workspace" },
   { id: "inventory", label: "Hospital inventory", icon: Boxes, group: "Workspace" },
   { id: "pharmacy", label: "My pharmacy workspace", icon: PackagePlus, group: "Workspace" },
-  { id: "shortages", label: "Shortage & coordination", icon: AlertTriangle, group: "Workspace" },
   { id: "disruption", label: "Disruption center", icon: Activity, group: "Response" },
   { id: "recommendations", label: "AI recommendations", icon: ArrowUpRight, group: "Response" },
   { id: "transportation", label: "Transportation", icon: Truck, group: "Response" },
@@ -30,7 +27,6 @@ const navigation = [
   { id: "audit", label: "Audit & analytics", icon: BarChart3, group: "Governance" },
   { id: "settings", label: "System settings", icon: Settings2, group: "System" },
 ];
-const requestedView = new URLSearchParams(window.location.search).get("view");
 
 const emptyData = {
   health: null, overview: null, hospitals: [], inventory: [], workflow: { active: false },
@@ -42,7 +38,7 @@ function getTitle(id) {
 }
 
 export default function App() {
-  const [active, setActive] = useState(requestedView === "shortages" ? "shortages" : "overview");
+  const [active, setActive] = useState("overview");
   const [data, setData] = useState(emptyData);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -50,7 +46,6 @@ export default function App() {
   const [reviewer, setReviewer] = useState("Clinical Supply Lead");
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [shortageNotice, setShortageNotice] = useState(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -73,29 +68,6 @@ export default function App() {
     if (!api.sessionToken) { setAuthChecked(true); return; }
     api.me().then(setUser).catch(() => api.setSession("")).finally(() => setAuthChecked(true));
   }, []);
-  useEffect(() => {
-    if (!user?.memberships?.length) return undefined;
-    let active = true;
-    const evaluate = async () => {
-      for (const membership of user.memberships) {
-        try {
-          const result = await api.evaluateShortages(membership.hospital_id);
-          const alert = (result.predictions || []).find((item) => {
-            if (item.risk_level === "Low") return false;
-            return !window.localStorage.getItem(`medguard-alert:${membership.hospital_id}:${item.medicine_id}:${item.risk_level}`);
-          });
-          if (alert && active) {
-            window.localStorage.setItem(`medguard-alert:${membership.hospital_id}:${alert.medicine_id}:${alert.risk_level}`, "shown");
-            setShortageNotice(alert);
-            return;
-          }
-        } catch { /* Offline demo API errors are already shown by the regular data loader. */ }
-      }
-    };
-    evaluate();
-    const timer = window.setInterval(evaluate, 5 * 60 * 1000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [user]);
   useEffect(() => {
     if (!toast) return undefined;
     const timer = window.setTimeout(() => setToast(""), 4200);
@@ -121,7 +93,6 @@ export default function App() {
     switch (active) {
       case "inventory": return <Inventory {...pageProps} />;
       case "pharmacy": return <PharmacyWorkspace {...pageProps} />;
-      case "shortages": return <ShortageCoordination {...pageProps} />;
       case "disruption": return <Disruption {...pageProps} />;
       case "recommendations": return <Recommendations {...pageProps} />;
       case "transportation": return <Transportation {...pageProps} />;
@@ -135,7 +106,7 @@ export default function App() {
   const pending = data.overview?.pending_approvals || 0;
 
   if (!authChecked) return <LoadingState label="Checking local demo session" />;
-  if (!user) return <Login onLogin={(signedInUser) => { setUser(signedInUser); setReviewer(signedInUser.display_name); setActive(requestedView === "shortages" ? "shortages" : "pharmacy"); refresh(); }} />;
+  if (!user) return <Login onLogin={(signedInUser) => { setUser(signedInUser); setReviewer(signedInUser.display_name); setActive("pharmacy"); }} />;
 
   async function signOut() {
     try { await api.logout(); } catch { /* local session may already have expired */ }
@@ -150,8 +121,8 @@ export default function App() {
           <div><strong>MedGuard<span>AI</span></strong><small>SUPPLY RESILIENCE</small></div>
         </div>
         <div className="workspace-switch">
-          <div className="workspace-avatar">{user.memberships[0]?.pharmacy_name?.slice(0,2).toUpperCase() || "NW"}</div>
-          <div className="workspace-copy"><strong>{user.memberships[0]?.pharmacy_name || "Karnataka network"}</strong><small>Pharmacy · Demo workspace</small></div>
+          <div className="workspace-avatar">KR</div>
+          <div className="workspace-copy"><strong>{data.overview?.pharmacy_name || "Karnataka network"}</strong><small>Pharmacy · Demo workspace</small></div>
           <span className="workspace-caret">⌄</span>
         </div>
         <div className="sidebar-nav">
@@ -197,7 +168,6 @@ export default function App() {
         </div>
       </main>
       {toast && <div className="toast" role="status"><CheckCircle2 size={17} />{toast}</div>}
-      {shortageNotice && <div className="modal-backdrop" role="presentation"><div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="global-shortage-title"><div className="modal-icon"><AlertTriangle/></div><p className="eyebrow">{shortageNotice.risk_level.toUpperCase()} SHORTAGE RISK · {shortageNotice.hospital_name}</p><h2 id="global-shortage-title">{shortageNotice.medicine_name} needs attention</h2><p>Current stock: <strong>{shortageNotice.current_stock} {shortageNotice.unit}</strong>; minimum: <strong>{shortageNotice.minimum_threshold} {shortageNotice.unit}</strong>. Estimated {shortageNotice.days_remaining ?? "unknown"} days remaining; stockout date {shortageNotice.estimated_stockout_date || "unavailable"}.</p><p>{shortageNotice.recommended_action}</p><p className="unit-label">Rule-based estimate from demo inventory. This is not a verified forecast.</p><div className="modal-actions"><button className="button button-outline" onClick={() => { setActive("shortages"); setShortageNotice(null); }}>View shortage details</button><button className="button button-primary" onClick={() => setShortageNotice(null)}>Dismiss</button></div></div></div>}
     </div>
   );
 }

@@ -15,7 +15,7 @@ def get_database_url() -> str:
     PostgreSQL is selected through DATABASE_URL.
     SQLite remains the local-development fallback.
     """
-    database_url = os.getenv("MEDGUARD_DATABASE_URL") or os.getenv("DATABASE_URL")
+    database_url = os.getenv("DATABASE_URL")
 
     if database_url:
         # Support providers that supply the older postgres:// scheme.

@@ -1,24 +1,20 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 
 from backend import db
 from backend.api.common import DecisionRequest, create_shipment, json_load, recommendation
-from backend.api.tenant import require_session, _assert_access
 
 router = APIRouter(prefix="/api")
 
 
 @router.post("/approvals/{approval_id}/decision")
-def decide(approval_id: str, payload: DecisionRequest, user: dict = Depends(require_session)):
+def decide(approval_id: str, payload: DecisionRequest):
     with db.connect() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        lock = " FOR UPDATE" if db.is_postgres() else ""
-        approval = connection.execute("SELECT * FROM approvals WHERE id=?" + lock, (approval_id,)).fetchone()
+        approval = connection.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
         if not approval:
             raise HTTPException(404, "Approval request not found.")
         if approval["decision"] != "pending":
             raise HTTPException(409, "This request has already received a decision.")
         rec = recommendation(connection, approval["recommendation_id"])
-        _assert_access(user, rec["hospital_id"], write=True)
         details = json_load(rec["details_json"])
         shipment_id = None
         if payload.decision == "approve":
@@ -29,9 +25,8 @@ def decide(approval_id: str, payload: DecisionRequest, user: dict = Depends(requ
             if not route or not route.get("feasible"):
                 raise HTTPException(409, "No feasible route is available for this quantity.")
             if rec["recommendation_type"] == "transfer":
-                lock = " FOR UPDATE" if db.is_postgres() else ""
                 donor = connection.execute(
-                    "SELECT current_stock,safety_stock FROM inventory WHERE hospital_id=? AND medicine_id=?" + lock,
+                    "SELECT current_stock,safety_stock FROM inventory WHERE hospital_id=? AND medicine_id=?",
                     (rec["donor_hospital_id"], rec["medicine_id"]),
                 ).fetchone()
                 if not donor or float(donor["current_stock"]) - quantity < float(donor["safety_stock"]):
@@ -41,23 +36,18 @@ def decide(approval_id: str, payload: DecisionRequest, user: dict = Depends(requ
                     rec["donor_hospital_name"], route, quantity,
                 )
             else:
-                if not rec["supplier_id"]:
+                if not rec["supplier_id"] or float(rec["available_qty"] or 0) < quantity:
                     raise HTTPException(409, "Supplier quantity is no longer available.")
-                lock = " FOR UPDATE" if db.is_postgres() else ""
-                supply = connection.execute("SELECT available_qty FROM supplier_medicines WHERE supplier_id=? AND medicine_id=?" + lock, (rec["supplier_id"], rec["medicine_id"])).fetchone()
-                if not supply or float(supply["available_qty"]) < quantity:
-                    raise HTTPException(409, "Supplier quantity is no longer available.")
-                connection.execute("UPDATE supplier_medicines SET available_qty=available_qty-? WHERE supplier_id=? AND medicine_id=?", (quantity,rec["supplier_id"],rec["medicine_id"]))
                 shipment_id = create_shipment(
                     connection, rec, "supplier", rec["supplier_id"],
-                    rec["supplier_name"], route, quantity, source_reserved=True,
+                    rec["supplier_name"], route, quantity,
                 )
             recommendation_status = "Approved"
         elif payload.decision == "reject":
             recommendation_status = "Rejected"
         else:
             recommendation_status = "Revision Requested"
-        reviewer = user["display_name"]
+        reviewer = payload.reviewer.strip()
         reason = payload.reason.strip()
         connection.execute(
             "UPDATE approvals SET decision=?,reviewer=?,reason=?,created_at=? WHERE id=?",

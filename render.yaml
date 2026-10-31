@@ -2,22 +2,17 @@ services:
   - type: web
     name: medguard-ai
     runtime: docker
-    plan: free
+    plan: 0.5c-512mb
     region: singapore
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /api/health
+    disk:
+      name: medguard-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
-      - key: MEDGUARD_DATABASE_URL
-        fromDatabase:
-          name: medguard-db
-          property: connectionString
+      - key: MEDGUARD_DB_PATH
+        value: /var/data/medguard.sqlite3
       - key: MEDGUARD_ADMIN_KEY
         generateValue: true
-
-databases:
-  - name: medguard-db
-    plan: free
-    databaseName: medguard
-    user: medguard
-    region: singapore

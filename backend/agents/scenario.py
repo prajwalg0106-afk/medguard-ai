@@ -18,7 +18,7 @@ def analyze(connection: sqlite3.Connection, disruption: dict, critical_days: int
                   i.current_stock,i.daily_demand,i.safety_stock
            FROM inventory i JOIN hospitals h ON h.id=i.hospital_id
            JOIN medicines m ON m.id=i.medicine_id
-           WHERE i.medicine_id=? ORDER BY i.current_stock / CASE WHEN COALESCE(i.daily_demand,0.000001)<0.000001 THEN 0.000001 ELSE COALESCE(i.daily_demand,0.000001) END""",
+           WHERE i.medicine_id=? ORDER BY i.current_stock / MAX(COALESCE(i.daily_demand,0.000001),0.000001)""",
         (disruption["medicine_id"],),
     ).fetchall()
     impacts = []
